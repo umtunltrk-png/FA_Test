@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Futbol Maç Analizi · Poisson + Dixon-Coles</title>
+<meta name="description" content="Gerçek lig verisiyle maç sonucu, skor ve gol piyasası olasılıkları.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚽</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--grass:#0e3b2c;--grass2:#134a37;--chalk:#f2f5ef;--muted:#a9c2b5;--line:rgba(242,245,239,.28);--card:#ffd23f;--home:#7fe0a8;--draw:#d9e2dc;--away:#ff8a65;--disp:"Barlow Condensed","Arial Narrow",Arial,sans-serif;--body:"Barlow",Arial,sans-serif}
+*{box-sizing:border-box}[hidden]{display:none!important}
+html{background:var(--grass)}
+body{margin:0;color:var(--chalk);font:400 17px/1.5 var(--body);min-height:100vh}
+main{max-width:860px;margin:0 auto;padding:40px 20px 56px}
+h1{font:700 clamp(2.2rem,7vw,3.6rem)/1 var(--disp);margin:0 0 8px}
+.lead{color:var(--muted);margin:0 0 24px;max-width:58ch}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tabs button{background:transparent;color:var(--chalk);border:2px solid var(--line);font-size:1rem;padding:8px 18px}
+.tabs button[aria-pressed=true]{background:var(--chalk);color:var(--grass);border-color:var(--chalk)}
+form{border:2px solid var(--line);border-radius:6px;background:var(--grass2)}
+.pair{display:grid;grid-template-columns:1fr 1fr;position:relative}
+.pair::before{content:"";position:absolute;left:50%;top:0;bottom:0;border-left:2px solid var(--line)}
+.side{padding:20px 22px}
+.side h2{font:700 1.5rem/1 var(--disp);margin:0 0 6px}
+.top{padding:20px 22px;border-bottom:2px solid var(--line);display:grid;grid-template-columns:1fr 1fr;gap:16px}
+label{display:block;font-size:.9rem;color:var(--muted);margin:12px 0 4px}
+.top label{margin-top:0}
+input,select{width:100%;padding:10px 12px;font:500 1rem var(--body);color:var(--chalk);background:rgba(0,0,0,.3);border:1px solid var(--line);border-radius:4px}
+select option{color:#111}
+input:focus-visible,select:focus-visible,button:focus-visible{outline:3px solid var(--card);outline-offset:2px}
+.go{border-top:2px solid var(--line);padding:16px 22px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;background:var(--grass)}
+button{font:700 1.15rem var(--disp);letter-spacing:.03em;background:var(--card);color:#1d1a05;border:0;border-radius:4px;padding:12px 26px;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+#err{color:#ffb4a2;font-size:.95rem}#st{color:var(--muted);font-size:.95rem}
+#out{margin-top:36px}
+.board{display:flex;align-items:center;justify-content:center;gap:clamp(12px,4vw,36px);padding:26px 12px;background:#06231a;border:2px solid var(--line);border-radius:6px;text-align:center}
+.board .team{flex:1;font:700 clamp(1.1rem,3.6vw,1.8rem)/1.1 var(--disp)}
+.board .score{font:700 clamp(3rem,13vw,6rem)/1 var(--disp);color:var(--card);white-space:nowrap}
+.cap{color:var(--muted);text-align:center;font-size:.9rem;margin:8px 0 28px}
+h3{font:700 1.3rem var(--disp);margin:28px 0 10px}
+.bar{display:flex;height:46px;border-radius:4px;overflow:hidden;border:2px solid var(--line)}
+.bar div{display:flex;align-items:center;justify-content:center;font:700 1.1rem var(--disp);color:#0b1f17}
+.legend{display:flex;justify-content:space-between;gap:8px;font-size:.88rem;color:var(--muted);margin-top:6px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.stat{border:1px solid var(--line);border-radius:4px;padding:12px 14px;background:var(--grass2)}
+.stat b{display:block;font:700 1.7rem/1.15 var(--disp)}.stat span{font-size:.88rem;color:var(--muted)}
+table{width:100%;border-collapse:collapse}td{padding:7px 0;border-bottom:1px solid var(--line)}td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.note{margin-top:40px;font-size:.85rem;color:var(--muted);border-top:1px solid var(--line);padding-top:14px}
+@media(max-width:600px){.pair,.top{grid-template-columns:1fr}.pair::before{display:none}.side+.side{border-top:2px solid var(--line)}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Maç analizi</h1>
+  <p class="lead">Lig ve sezon seçin, iki takımı belirleyin. Model, takımların ev/deplasman gol verilerini lig ortalamasıyla kıyaslar ve olasılıkları hesaplar.</p>
+
+  <div class="tabs">
+    <button type="button" id="tLive" aria-pressed="true">Canlı veri</button>
+    <button type="button" id="tMan" aria-pressed="false">Elle gir</button>
+  </div>
+
+  <form id="f" novalidate>
+    <div id="live">
+      <div class="top">
+        <div><label for="lg">Lig</label>
+          <select id="lg"><option value="203">Süper Lig</option><option value="39">Premier League</option><option value="140">La Liga</option><option value="135">Serie A</option><option value="78">Bundesliga</option><option value="61">Ligue 1</option></select></div>
+        <div><label for="ss">Sezon</label><select id="ss"></select></div>
+      </div>
+      <div class="pair">
+        <div class="side"><h2>Ev sahibi</h2><label for="hT">Takım</label><select id="hT" disabled></select></div>
+        <div class="side"><h2>Deplasman</h2><label for="aT">Takım</label><select id="aT" disabled></select></div>
+      </div>
+    </div>
+
+    <div id="man" hidden>
+      <div class="top">
+        <div><label for="lh">Lig ort. ev sahibi golü / maç</label><input id="lh" type="number" step="0.01" min="0.2" max="4" value="1.5"></div>
+        <div><label for="la">Lig ort. deplasman golü / maç</label><input id="la" type="number" step="0.01" min="0.2" max="4" value="1.2"></div>
+      </div>
+      <div class="pair">
+        <div class="side"><h2>Ev sahibi</h2>
+          <label for="mhN">Takım adı</label><input id="mhN" value="Ev sahibi" maxlength="40">
+          <label for="mhF">Evde attığı gol / maç</label><input id="mhF" type="number" step="0.01" min="0" max="10" value="1.9">
+          <label for="mhA">Evde yediği gol / maç</label><input id="mhA" type="number" step="0.01" min="0" max="10" value="0.9"></div>
+        <div class="side"><h2>Deplasman</h2>
+          <label for="maN">Takım adı</label><input id="maN" value="Deplasman" maxlength="40">
+          <label for="maF">Deplasmanda attığı gol / maç</label><input id="maF" type="number" step="0.01" min="0" max="10" value="1.4">
+          <label for="maA">Deplasmanda yediği gol / maç</label><input id="maA" type="number" step="0.01" min="0" max="10" value="1.3"></div>
+      </div>
+    </div>
+
+    <div class="go"><button type="submit" id="btn">Analiz et</button><span id="st"></span><span id="err" role="alert"></span></div>
+  </form>
+
+  <section id="out" hidden aria-live="polite">
+    <div class="board"><div class="team" id="oEv"></div><div class="score" id="oScore"></div><div class="team" id="oDp"></div></div>
+    <p class="cap">En olası skor</p>
+    <h3>Maç sonu olasılıkları</h3>
+    <div class="bar" id="oBar"></div>
+    <div class="legend"><span id="lH"></span><span>Beraberlik</span><span id="lA"></span></div>
+    <h3>Diğer piyasalar</h3>
+    <div class="stats" id="oStats"></div>
+    <h3>En olası 5 skor</h3>
+    <table id="oTop"></table>
+  </section>
+
+  <p class="note">Model: lig ortalamasına göre saldırı/savunma gücü, ev sahibi avantajı, az maç oynayan takımlar için ortalamaya çekme, son 5 maç formu ve düşük skorlar için Dixon-Coles düzeltmesi. Sakatlık, ceza, hakem ve kadro bilgisi yoktur. Sonuçlar bilgilendirme amaçlıdır, bahis tavsiyesi değildir.</p>
+</main>
+
+<script>
+(function(){
+  var $=function(i){return document.getElementById(i)}, MAX=11, K=6, RHO=-0.1, data=null, mode="live";
+  var pct=function(x){return (x*100).toFixed(1).replace(".",",")+"%"}, f2=function(x){return x.toFixed(2).replace(".",",")};
+  var esc=function(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML};
+
+  // Sezon listesi: Temmuz'dan sonra yeni sezon başlamış sayılır
+  var now=new Date(), cur=now.getMonth()>=6?now.getFullYear():now.getFullYear()-1;
+  for(var y=cur;y>=cur-3;y--){var o=document.createElement("option");o.value=y;o.textContent=y+"/"+String(y+1).slice(2);$("ss").appendChild(o);}
+
+  function setMode(m){mode=m;$("live").hidden=m!=="live";$("man").hidden=m!=="man";
+    $("tLive").setAttribute("aria-pressed",m==="live");$("tMan").setAttribute("aria-pressed",m==="man");$("err").textContent="";}
+  $("tLive").onclick=function(){setMode("live")};$("tMan").onclick=function(){setMode("man")};
+
+  function load(){
+    data=null;$("err").textContent="";$("st").textContent="Takımlar yükleniyor…";$("btn").disabled=true;
+    $("hT").disabled=$("aT").disabled=true;
+    fetch("/api/league?league="+$("lg").value+"&season="+$("ss").value)
+      .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||"Veri alınamadı.");return j;});})
+      .then(function(j){
+        data=j;var t=j.takimlar.slice().sort(function(a,b){return a.ad.localeCompare(b.ad,"tr")});
+        var h=t.map(function(x){return '<option value="'+x.id+'">'+esc(x.ad)+'</option>'}).join("");
+        $("hT").innerHTML=h;$("aT").innerHTML=h;$("aT").selectedIndex=Math.min(1,t.length-1);
+        $("hT").disabled=$("aT").disabled=false;$("st").textContent=j.lig+" · "+j.takimlar.length+" takım";
+      })
+      .catch(function(e){
+        $("st").textContent="";
+        $("err").textContent=(e.message==="Failed to fetch"?"Sunucuya ulaşılamadı. Site Netlify'da yayında mı?":e.message)+" İstersen \"Elle gir\" sekmesini kullan.";
+      })
+      .then(function(){$("btn").disabled=false});
+  }
+  $("lg").onchange=load;$("ss").onchange=load;load();
+
+  // Küçük örneklemde oranı lig ortalamasına doğru çeker (n az ise lig ortalaması ağır basar)
+  function shrink(sum,n,lg){var rate=n>0?sum/n:lg;return (rate*n+lg*K)/(n+K)}
+  function formFactor(s){
+    if(!s)return 1;var p=0;for(var i=0;i<s.length;i++)p+=s[i]==="W"?3:s[i]==="D"?1:0;
+    return 1+0.06*(p/s.length-1.4)/1.4; // en fazla yaklaşık ±6%
+  }
+  function pmfs(l){var a=[Math.exp(-l)];for(var k=1;k<MAX;k++)a.push(a[k-1]*l/k);return a}
+
+  function compute(h,a,L){
+    var hAtt=shrink(h.hf,h.hn,L.h)/L.h, hDef=shrink(h.ha,h.hn,L.a)/L.a;
+    var aAtt=shrink(a.af,a.an,L.a)/L.a, aDef=shrink(a.aa,a.an,L.h)/L.h;
+    var lam=Math.max(0.05,L.h*hAtt*aDef*formFactor(h.form));
+    var mu=Math.max(0.05,L.a*aAtt*hDef*formFactor(a.form));
+    var ph=pmfs(lam),pa=pmfs(mu),cells=[],tot=0,i,j,t;
+    for(i=0;i<MAX;i++)for(j=0;j<MAX;j++){
+      t=1; // Dixon-Coles: 0-0, 1-0, 0-1, 1-1 skorlarının bağımsız Poisson'dan sapmasını düzeltir
+      if(i===0&&j===0)t=1-lam*mu*RHO;else if(i===0&&j===1)t=1+lam*RHO;else if(i===1&&j===0)t=1+mu*RHO;else if(i===1&&j===1)t=1-RHO;
+      var p=ph[i]*pa[j]*t;cells.push([i,j,p]);tot+=p;
+    }
+    var H=0,D=0,A=0,ov=0,bt=0;
+    cells.forEach(function(c){c[2]/=tot;var p=c[2];
+      if(c[0]>c[1])H+=p;else if(c[0]===c[1])D+=p;else A+=p;
+      if(c[0]+c[1]>2)ov+=p;if(c[0]>0&&c[1]>0)bt+=p;});
+    cells.sort(function(x,y){return y[2]-x[2]});
+    return {lam:lam,mu:mu,H:H,D:D,A:A,ov:ov,bt:bt,cells:cells};
+  }
+
+  $("f").addEventListener("submit",function(e){
+    e.preventDefault();$("err").textContent="";var h,a,L,hN,aN;
+    if(mode==="live"){
+      if(!data){$("err").textContent="Önce takımlar yüklenmeli.";return;}
+      var th=data.takimlar.filter(function(x){return x.id==$("hT").value})[0],ta=data.takimlar.filter(function(x){return x.id==$("aT").value})[0];
+      if(!th||!ta||th.id===ta.id){$("err").textContent="İki farklı takım seçin.";return;}
+      var sh=0,sa=0,nh=0,na=0;data.takimlar.forEach(function(x){sh+=x.evAtilan;nh+=x.evOyn;sa+=x.depAtilan;na+=x.depOyn;});
+      if(!nh||!na){$("err").textContent="Bu sezon henüz maç oynanmamış. Önceki sezonu seçin.";return;}
+      L={h:sh/nh,a:sa/na};
+      h={hf:th.evAtilan,ha:th.evYenilen,hn:th.evOyn,form:th.form};a={af:ta.depAtilan,aa:ta.depYenilen,an:ta.depOyn,form:ta.form};
+      hN=th.ad;aN=ta.ad;
+    }else{
+      var n=function(id){return parseFloat($(id).value)},v=["lh","la","mhF","mhA","maF","maA"].map(n);
+      if(v.some(function(x){return isNaN(x)||x<0||x>10})||v[0]<0.2||v[1]<0.2){$("err").textContent="Değerler geçerli aralıkta olmalı (lig ortalamaları en az 0,2).";return;}
+      L={h:v[0],a:v[1]};h={hf:v[2]*1000,ha:v[3]*1000,hn:1000,form:""};a={af:v[4]*1000,aa:v[5]*1000,an:1000,form:""};
+      hN=$("mhN").value.trim()||"Ev sahibi";aN=$("maN").value.trim()||"Deplasman";
+    }
+    var r=compute(h,a,L),best=r.cells[0];
+    $("oEv").textContent=hN;$("oDp").textContent=aN;$("oScore").textContent=best[0]+" – "+best[1];
+    $("oBar").innerHTML='<div style="width:'+r.H*100+'%;background:var(--home)">'+pct(r.H)+'</div><div style="width:'+r.D*100+'%;background:var(--draw)">'+pct(r.D)+'</div><div style="width:'+r.A*100+'%;background:var(--away)">'+pct(r.A)+'</div>';
+    $("lH").textContent=hN+" kazanır";$("lA").textContent=aN+" kazanır";
+    var lead=(r.H>r.D&&r.H>r.A)?hN+" kazanır (MS 1)":(r.A>r.H&&r.A>r.D)?aN+" kazanır (MS 2)":"Beraberlik (MS X)";
+    var st=[[lead,"Model tahmini"],[f2(r.lam)+" – "+f2(r.mu),"Beklenen gol"],[pct(r.bt),"Karşılıklı gol var"],[pct(1-r.bt),"Karşılıklı gol yok"],[pct(r.ov),"2,5 üst"],[pct(1-r.ov),"2,5 alt"]];
+    $("oStats").innerHTML=st.map(function(s){return '<div class="stat"><b>'+esc(s[0])+'</b><span>'+s[1]+'</span></div>'}).join("");
+    $("oTop").innerHTML=r.cells.slice(0,5).map(function(c){return '<tr><td>'+esc(hN)+' '+c[0]+' – '+c[1]+' '+esc(aN)+'</td><td>'+pct(c[2])+'</td></tr>'}).join("");
+    $("out").hidden=false;$("out").scrollIntoView({behavior:"smooth",block:"start"});
+  });
+})();
+</script>
+</body>
+</html>
